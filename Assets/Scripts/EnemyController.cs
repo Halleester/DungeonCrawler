@@ -30,11 +30,35 @@ public class EnemyController : MonoBehaviour, IEnemy
     private bool isMoving = false;
     private bool isDelaying = false;
 
+    public float closeDistance = 9f;
+
+    public Renderer faceRenderer;
+    public Material defaultMat;
+    public Material spotMat;
+    public Material closeMat;
+
+    public enum RoamerState { Roaming, Chasing }
+    public RoamerState currentState = RoamerState.Roaming;
+
+    public Transform[] waypoints;
+    private int waypointIndex = 0;
+
+    public float roamingWaitTime = 3f;
+
+    [Header("Audio Settings")]
+    public AudioSource roamerSource;
+    public AudioClip roamClip;
+    public AudioClip chaseClip;
+    public AudioClip closeClip;
+
     public void Start()
     {
         targetPos = Vector3Int.RoundToInt(transform.position);
         transform.position = targetPos;
         actualSwingDelay = swingDelay;
+
+        roamerSource.clip = roamClip;
+        roamerSource.Play();
     }
 
     public void Update() {
@@ -48,13 +72,66 @@ public class EnemyController : MonoBehaviour, IEnemy
                 Debug.DrawRay(transform.position, PlayerController.Instance.transform.position - transform.position, Color.red);
             }
         }
-        canSeePlayer = PlayerController.PlayerInLight() && hitPlayer;
+        bool prevSee = canSeePlayer;
+        canSeePlayer = PlayerController.PlayerInLight() && hitPlayer && !PlayerController.Instance.playerDead;
+
+        if(prevSee != canSeePlayer)
+        {
+            if(canSeePlayer) {
+                currentState = RoamerState.Chasing;
+                roamerSource.clip = chaseClip;
+                roamerSource.Play();
+                if (roamWaitRoutine != null) {
+                    isDelaying = false;
+                    StopCoroutine(roamWaitRoutine);
+                }
+            }
+            else {
+                if(delayRoutine != null) {
+                    StopCoroutine(delayRoutine);
+                }
+                currentState = RoamerState.Roaming;
+                roamWaitRoutine = StartCoroutine(RoamingDelay());
+            }
+        }
+
+        float dist = Vector3.Distance(PlayerController.Instance.transform.position, transform.position);
+        if (!useSwingDelay && canSeePlayer)
+        {
+            if (dist <= closeDistance)
+            {
+                if (!atCloseMat) {
+                    atCloseMat = true;
+                    roamerSource.clip = chaseClip;
+                    roamerSource.Play();
+                }
+                faceRenderer.material = closeMat;
+            }
+            else
+            {
+                atCloseMat = false;
+                faceRenderer.material = spotMat;
+            }
+        }
+        else
+        {
+            atCloseMat = false;
+            faceRenderer.material = defaultMat;
+        }
+
+        
+        if (dist <= 2) {
+            PlayerController.Instance.KillPlayer(true);
+        }
     }
+
+    private bool atCloseMat = false;
 
     private Vector3 lockedDir;
     private Vector3 prevPlayerPos;
     private bool useSwingDelay = false;
     private Coroutine delayRoutine;
+    private Coroutine roamWaitRoutine;
     private void FixedUpdate()
     {
         if (isMoving)
@@ -77,6 +154,10 @@ public class EnemyController : MonoBehaviour, IEnemy
                 isDelaying = false;
                 StopCoroutine(delayRoutine);
             }
+            if(roamWaitRoutine != null) {
+                isDelaying = false;
+                StopCoroutine(roamWaitRoutine);
+            }
             if (!IsWallInDir(escapeDir) && IsFloorInDir(escapeDir))
             {
                 isMoving = true;
@@ -89,44 +170,30 @@ public class EnemyController : MonoBehaviour, IEnemy
         {
             if(canSeePlayer) // Chase logic
             {
-                if(prevPlayerPos != PlayerController.Instance.transform.position) { lockedDir = Vector3.zero; }
+                Vector3 lookDir = PlayerController.Instance.transform.position - transform.position;
+                lookDir.y = 0;
+                transform.rotation = Quaternion.LookRotation(lookDir);
+
+                if (prevPlayerPos != PlayerController.Instance.transform.position) { lockedDir = Vector3.zero; }
                 Vector3 dirToPlayer = Vector3.Normalize(PlayerController.Instance.transform.position - transform.position);
-                Debug.DrawRay(transform.position + Vector3.up, dirToPlayer, Color.white);
-                List<Vector3> directions = new List<Vector3> { Vector3.forward, Vector3.back, Vector3.left, Vector3.right };
-                List<Tuple<Vector3, float>> sortedDirection = new List<Tuple<Vector3, float>>();
-                foreach(Vector3 dir in directions) {
-                    float difference = Vector3.Dot(dirToPlayer, dir);
-                    sortedDirection.Add(new Tuple<Vector3, float>(dir, difference));
-                }
-                sortedDirection = sortedDirection.OrderByDescending(x => x.Item2).ToList();
-                bool inLoop = true;
-                int loopCounter = 0;
-                while(inLoop)
+
+                TryMovingTowardsTarget(dirToPlayer);
+            } else
+            {
+                if(targetPos == waypoints[waypointIndex].position)
                 {
-                    loopCounter++;
-                    foreach (Tuple<Vector3, float> dirTuple in sortedDirection) {
-                        Vector3 dir = dirTuple.Item1 * GameManager.Instance.worldUnits;
-                        if (dir == lockedDir * -1) {
-                            continue;
-                        }
-                        if (!IsWallInDir(dir) && IsFloorInDir(dir)) {
-                            isMoving = true;
-                            prevTargetPos = targetPos;
-                            targetPos += dir;
-                            lockedDir = dir;
-                            inLoop = false;
-                            break;
-                        } else if (lockedDir == dir) {
-                            lockedDir = Vector3.zero;
-                            break;
-                        }
-                    }
-                    if(loopCounter > 3) {
-                        Debug.Log("Forcing out of loop :(");
-                        break;
-                    }
+                    waypointIndex++;
+                    if(waypointIndex >= waypoints.Length) { waypointIndex -= waypoints.Length; }
                 }
-                
+                Vector3 prevTarget = targetPos;
+
+                Vector3 dirToWaypoint = Vector3.Normalize(waypoints[waypointIndex].position - transform.position);
+                TryMovingTowardsTarget(dirToWaypoint);
+
+                Vector3 newTarget = targetPos;
+                if(newTarget != prevTarget) {
+                    transform.rotation = Quaternion.LookRotation(newTarget - prevTarget);
+                }
             }
         }
         prevPlayerPos = PlayerController.Instance.transform.position;
@@ -165,11 +232,64 @@ public class EnemyController : MonoBehaviour, IEnemy
         isDelaying = false;
     }
 
+    private IEnumerator RoamingDelay()
+    {
+        isDelaying = true;
+        yield return new WaitForSeconds(roamingWaitTime);
+        isDelaying = false;
+    }
+
     private bool swungAt = false;
     private Vector3 escapeDir;
     public void SwungAt(Vector3 fromDir)
     {
         swungAt = true;
         escapeDir = Vector3Int.RoundToInt(fromDir) * GameManager.Instance.worldUnits;
+    }
+
+    public void TryMovingTowardsTarget(Vector3 dirToTarget)
+    {
+        Debug.DrawRay(transform.position + Vector3.up, dirToTarget, Color.white);
+        List<Vector3> directions = new List<Vector3> { Vector3.forward, Vector3.back, Vector3.left, Vector3.right };
+        List<Tuple<Vector3, float>> sortedDirection = new List<Tuple<Vector3, float>>();
+        foreach (Vector3 dir in directions)
+        {
+            float difference = Vector3.Dot(dirToTarget, dir);
+            sortedDirection.Add(new Tuple<Vector3, float>(dir, difference));
+        }
+        sortedDirection = sortedDirection.OrderByDescending(x => x.Item2).ToList();
+        bool inLoop = true;
+        int loopCounter = 0;
+        while (inLoop)
+        {
+            loopCounter++;
+            foreach (Tuple<Vector3, float> dirTuple in sortedDirection)
+            {
+                Vector3 dir = dirTuple.Item1 * GameManager.Instance.worldUnits;
+                if (dir == lockedDir * -1)
+                {
+                    continue;
+                }
+                if (!IsWallInDir(dir) && IsFloorInDir(dir))
+                {
+                    isMoving = true;
+                    prevTargetPos = targetPos;
+                    targetPos += dir;
+                    lockedDir = dir;
+                    inLoop = false;
+                    break;
+                }
+                else if (lockedDir == dir)
+                {
+                    lockedDir = Vector3.zero;
+                    break;
+                }
+            }
+            if (loopCounter > 3)
+            {
+                Debug.Log("Forcing out of loop :(");
+                break;
+            }
+        }
     }
 }

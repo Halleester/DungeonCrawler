@@ -41,6 +41,16 @@ public class FlickeringLight : MonoBehaviour
 
     protected bool prevSeePlayer = false;
 
+    [Header("Sound Settings")]
+    public AudioSource burnSource;
+    [Range(0, 1)]
+    public float burnVolume = 1;
+    public AudioSource effectSource;
+    [Range(0, 1)]
+    public float effectVolume = 1;
+    public AudioClip extinguishNoise;
+    public AudioClip litNoise;
+
     public virtual void Start()
     {
         currentLitLevel = isLit ? 1 : 0;
@@ -73,7 +83,17 @@ public class FlickeringLight : MonoBehaviour
     public void SetLightLevel(float litLevel)
     {
         currentLitLevel = litLevel;
+        bool prevLit = isLit;
         isLit = currentLitLevel > 0;
+
+        if(isLit != prevLit)
+        {
+            if(isLit && litNoise) {
+                effectSource.PlayOneShot(litNoise, effectVolume);
+            } else if(!isLit && extinguishNoise) {
+                effectSource.PlayOneShot(extinguishNoise, effectVolume);
+            }
+        }
     }
 
     public virtual void Update()
@@ -84,6 +104,10 @@ public class FlickeringLight : MonoBehaviour
         flickerAmount *= isLit ? 1 : 0;
 
         visualLitLevel = Mathf.MoveTowards(visualLitLevel, currentLitLevel, visualChangeRate);
+
+        if(burnSource) {
+            burnSource.volume = burnVolume * visualLitLevel;
+        }
 
         // Check if the light can raycast to the player (and is lit)
         if (PlayerController.Instance != null)

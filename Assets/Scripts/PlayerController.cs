@@ -49,7 +49,7 @@ public class PlayerController : MonoBehaviour
     private bool isMoveDelayed = false;
     private bool isRotating = false;
     private bool isRotateDelayed = false;
-    private bool playerDead = false;
+    public bool playerDead = false;
 
     public BrazierObject recentBrazier;
 
@@ -96,8 +96,31 @@ public class PlayerController : MonoBehaviour
 
     [Header("Game Over Settings")]
     public float deathDelayTime = 2f;
+    public float deathBreathTime = 2f;
     public float deathTitleDelay = 1f;
     public GameObject jumpscareObj;
+
+    [Header("Audio Settings")]
+    public AudioSource footSource;
+    public AudioClip[] stepClips;
+    [Range(0, 1)]
+    public float stepVolume = 1f;
+
+    [Space(20)]
+    public AudioSource candleSource;
+    [Range(0, 1)]
+    public float candleBurnVolume = 1;
+    public AudioSource candleEffectSource;
+    [Range(0, 1)]
+    public float candleEffectVolume = 1;
+    public AudioClip candleExtinguishClip;
+    public AudioClip candleLightClip;
+
+    [Space(20)]
+    public AudioSource playerSource;
+    public AudioClip breathQuicken;
+    [Range(0, 1)]
+    public float breathVolume = 1;
 
     // Start is called before the first frame update
     private void Start()
@@ -170,7 +193,7 @@ public class PlayerController : MonoBehaviour
             Cursor.lockState = CursorLockMode.Locked;
         }
 
-        if(Input.GetButtonDown("Swing") && !isSwinging && !isMoving && !playerDead) {
+        if(Input.GetButtonDown("Swing") && !isSwinging && !playerDead) {
             if(lanternActive) {
                 if (lanternLitLevel != 0) {
                     StartCoroutine(SwingLight());
@@ -203,6 +226,8 @@ public class PlayerController : MonoBehaviour
         glowLight.intensity = visualLitLevel * glowBrightness;
 
         candleParticles.gameObject.transform.localScale = Vector3.one * candleSizeCurve.Evaluate(visualLitLevel);
+
+        candleSource.volume = candleBurnVolume * visualLitLevel;
     }
 
     private IEnumerator SwingLight()
@@ -267,7 +292,14 @@ public class PlayerController : MonoBehaviour
             isMoving = true;
             prevTargetPos = targetPos;
             targetPos += moveDir;
+            PlayStepSound();
         }
+    }
+
+    public void PlayStepSound()
+    {
+        AudioClip randomStep = stepClips[Random.Range(0, stepClips.Length)];
+        footSource.PlayOneShot(randomStep, stepVolume);
     }
 
     public bool IsWallInDir(Vector3 dir)
@@ -365,12 +397,22 @@ public class PlayerController : MonoBehaviour
 
     private void AddToLampLitLevel(float value)
     {
+        bool wasLit = lanternLitLevel > 0;
         lanternLitLevel += value;
         lanternLitLevel = Mathf.Clamp01(lanternLitLevel);
 
         if (lanternLitLevel <= 0 && currentMatches <= 0) {
             StartCoroutine(GameOver());
-        } 
+        }
+
+        bool isLit = lanternLitLevel > 0;
+        if(isLit != wasLit) {
+            if(isLit && candleLightClip) {
+                candleEffectSource.PlayOneShot(candleLightClip, candleEffectVolume);
+            } else if(!isLit && candleExtinguishClip) {
+                candleEffectSource.PlayOneShot(candleExtinguishClip, candleEffectVolume);
+            }
+        }
     }
 
     private IEnumerator DelayMove(bool isMove)
@@ -392,17 +434,22 @@ public class PlayerController : MonoBehaviour
         return Instance.objectsLightingPlayer.Count > 0 || (Instance.lanternLitLevel > 0 && Instance.lanternActive);
     }
 
-    public void KillPlayer() {
+    public void KillPlayer(bool unlight = false) {
         if(playerDead) { return; }
         Debug.Log("Player Dieded :(");
         playerDead = true;
-        StartCoroutine(RespawnPlayer());
+        StartCoroutine(RespawnPlayer(unlight));
     }
 
     public IEnumerator GameOver()
     {
-        // Play sound effect of heavy breathing
+        if(onFinale) { yield break; }
+        GameManager.SetMusicVolume(0);
         yield return new WaitForSeconds(deathDelayTime);
+        if (onFinale) { yield break; }
+        playerSource.PlayOneShot(breathQuicken, breathVolume);
+        // Play sound effect of heavy breathing
+        yield return new WaitForSeconds(deathBreathTime);
         // Jumpscare and kick to menu
         jumpscareObj.SetActive(true);
         playerDead = true;
@@ -411,8 +458,9 @@ public class PlayerController : MonoBehaviour
         SceneManager.LoadScene("Title");
     }
 
-    public IEnumerator RespawnPlayer()
+    public IEnumerator RespawnPlayer(bool unlight)
     {
+        if(unlight) { AddToLampLitLevel(-lanternLitLevel); }
         yield return new WaitForSeconds(1);
         Vector3 respawnPos = recentBrazier != null ? recentBrazier.respawnPos : new Vector3(0, 1, 0);
         float respawnRot = recentBrazier != null ? recentBrazier.respawnRot : 90;
@@ -434,5 +482,23 @@ public class PlayerController : MonoBehaviour
             recentBrazier?.SetLightLevel(0);
         }
         
+    }
+
+    private bool onFinale = false;
+    public void Finale()
+    {
+        onFinale = true;
+        GameManager.SetMusicVolume(0);
+        StartCoroutine(FinaleScene());
+    }
+
+    public IEnumerator FinaleScene()
+    {
+        yield return new WaitForSeconds(8f);
+        recentBrazier?.SetLightLevel(0);
+        AddToLampLitLevel(-lanternLitLevel);
+        yield return new WaitForSeconds(2f);
+        Cursor.lockState = CursorLockMode.None;
+        SceneManager.LoadScene("Title");
     }
 }

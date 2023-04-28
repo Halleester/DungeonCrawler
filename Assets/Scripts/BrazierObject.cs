@@ -7,8 +7,7 @@ public class BrazierObject : FlickeringLight, ILightable
 
     public void LightObject() {
         if(isLit) { return; }
-        isLit = true;
-        currentLitLevel = 1;
+        SetLightLevel(1);
         PlayerController.Instance.recentBrazier = this;
     }
 }

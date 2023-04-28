@@ -26,5 +26,6 @@ public class LanternPickup : FlickeringLight, ILightable
             light.SetLightLevel(0);
             yield return new WaitForSeconds(individualDelay);
         }
+        GameManager.SetMusicVolume(0.7f, true);
     }
 }
